@@ -73,7 +73,7 @@ class EEGPowersDataPoint(DataPoint):
         self.highBeta = self._convertToBigEndianInteger(self._dataValueBytes[15:18]);
         self.lowGamma = self._convertToBigEndianInteger(self._dataValueBytes[18:21]);
         self.midGamma = self._convertToBigEndianInteger(self._dataValueBytes[21:24]);
-
+        self.blink = (self.delta + self.theta + self.lowAlpha + self.highAlpha + self.lowBeta + self.highBeta + self.lowGamma + self.midGamma) / 8;
 
     def _convertToBigEndianInteger(self, threeBytes):
         # TODO(check if this is correct iwth soem more tests..
@@ -87,7 +87,20 @@ class EEGPowersDataPoint(DataPoint):
         return bigEndianInteger
         
     def __str__(self):
-        return """EEG Powers:
+        if (self.total < 5000 or self.total > 50000):
+            return """EEG Powers:
+                delta: {self.delta}
+                theta: {self.theta}
+                lowAlpha: {self.lowAlpha}
+                highAlpha: {self.highAlpha}
+                lowBeta: {self.lowBeta}
+                highBeta: {self.highBeta}
+                lowGamma: {self.lowGamma}
+                midGamma: {self.midGamma}
+                BLINK: {self.blink}
+                """.format(self = self)
+        else:
+            return """EEG Powers:
                 delta: {self.delta}
                 theta: {self.theta}
                 lowAlpha: {self.lowAlpha}
@@ -97,3 +110,4 @@ class EEGPowersDataPoint(DataPoint):
                 lowGamma: {self.lowGamma}
                 midGamma: {self.midGamma}
                 """.format(self = self)
+        
