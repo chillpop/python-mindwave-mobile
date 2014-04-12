@@ -1,14 +1,4 @@
-'''Classes and tools for interacting with the NeuroSky Mindwave Mobile headset
-
-Example usage:
-
-from headset import Headset
-
-headset = Headset()
-point = headset.readDatapoint()
-print point.attention
-print point.wave_delta
-print "Was the headset being worn?", point.headsetOnHead()
+'''Classes and tools for interacting with the NeuroSky Mindwave Mobile headset.
 
 Headset:
   Connects over bluetooth to a mac address given to it, and when asked pulls
@@ -24,9 +14,10 @@ Details of the communications protocol can be found here:
 
 try:
   import bluetooth
-except ImportError:
-  print 'Bluetooth module not found, BluetoothHeadset class will not be usable. Try using FakeHeadset.'
-
+  import dbus.exceptions
+except ImportError, e:
+  # This package may not exist on mac. Can still use FakeHeadset.
+  pass
 import datetime
 import logging
 import time
@@ -35,6 +26,11 @@ import random
 
 LOGGING_LEVEL = logging.INFO
 logging.basicConfig(level=LOGGING_LEVEL, format='%(message)s')
+
+# We have two headsets, choose the right mac address
+HEADSET1 = '74:E5:43:B1:93:D5'
+HEADSET2 = '74:E5:43:D5:78:CD'
+ALL_HEADSET_MAC_ADDRS = [HEADSET1, HEADSET2]
 
 # Byte codes from Neurosky
 SYNC                 = 0xAA
@@ -50,13 +46,6 @@ EEG_WAVES            = 0x83
 WAVE_NAMES_IN_ORDER = [
   'delta', 'theta', 'alpha_low', 'alpha_high',
   'beta_low', 'beta_high', 'gamma_low', 'gamma_mid']
-
-DATAPOINT_PRINT_FORMAT = '''
-Datapoint %(timestr)s
----
-Attention: %(attention)s
-Meditation: %
-'''
 
 class Datapoint():
   def __init__(self):
@@ -108,9 +97,13 @@ class Datapoint():
     # First byte is least significant, third is most significant
     return (values[2] << 16) | (values[1] << 8) | values[0]
 
-  def clean(self):
-    '''Determine if the data was taken reliably and with the headset worn.'''
-    return self.poor_signal < 200 and self.attention > 0
+  def headsetOnHead(self):
+    '''Returns True if the headset is being worn correctly.'''
+    return self.poor_signal < 200
+
+  def headsetDataReady(self):
+    '''Returns True if the headset is producing data that we can read.'''
+    return self.attention > 0
 
   def complete(self):
     return (self.attention != None and
@@ -122,6 +115,10 @@ class Datapoint():
     dt = datetime.datetime.fromtimestamp(self.timestamp)
     timestr = dt.strftime("%Y-%m-%d %H:%M:%S")
     lines = ["***** Datapoint %s *****" % timestr]
+    lines.append("* Headset %sWORN CORRECTLY" %
+                 ('' if self.headsetOnHead() else 'NOT '))
+    lines.append("* Headset DATA %sREADY" %
+                 ('' if self.headsetDataReady() else 'NOT '))
     lines.append("* Poorness of signal (0-200):\t%d" % self.poor_signal)
     lines.append("* Attention (1-100):\t%d" % self.attention)
     lines.append("* Meditation (1-100):\t%d" % self.meditation)
@@ -162,23 +159,40 @@ class Headset:
     
 class FakeHeadset(Headset):
   """
-  Emulator class to use during development. Returns datapoints filled with random
-  values at 1sec intervals. Does not actually connect to anything.
+  Emulator class to use during development. Returns datapoints filled with fake
+  values at 1sec intervals. Does not actually connect to anything. Does not
+  emulate raw data.
   """
   
-  ATT_MED_MEAN = 50
-  ATT_MED_SD = 20
-  ATT_MED_MIN = 0
-  ATT_MED_MAX = 100
+  # used when generating random values
+  am_sd = 20
+  am_min = 1
+  am_max = 100
   
-  def __init__(self, bad_data=False):
+  # used when generating non-random values
+  am_high = 90
+  am_low = 10
+  
+  # used when generating bad data
+  on_time = 16
+  off_time = 8
+  
+  def __init__(self, bad_data=False, random_data=False, mean = 50):
     """
-      If bad_data is true, poor_signal will flip between 0 and 200 every 5 datapoints.
-      It will otherwise always be 0.
+      If bad_data is true, poor_signal will flip between 0 and 200 periodically.
+      It will otherwise always be 0. 
+      
+      If random_data is true, attention and meditation values are randomly 
+      sampled from a normal distribution (with given mean). If false, they both flip
+      between 10 and 90 when poor_signal==0 to allow easy assessment of behavior at extremes.
     """
     self.connected = False
     self.bad_data = bad_data
     self.cnt = 0
+    self.am_mean = mean
+    self.random_data = random_data
+    self.start = time.time()
+    self._reset_spoofed_values()
     
   def connect(self):
     self.connected = True
@@ -188,6 +202,42 @@ class FakeHeadset(Headset):
     self.connected = False
     logging.info("Disconnected from imaginary headset!")
     
+  def _new_response_values(self, high_first=False):
+      # high_first parameter is only used when self.random_data is false - controls whether
+      # high values occur before low ones
+      seq = [0] * 5
+      def int_constrain(x, minx = self.am_min, maxx = self.am_max):
+          return int( min( max(minx,x), maxx ) )
+      if self.random_data:
+        seq.extend([ int_constrain( random.gauss(self.am_mean, self.am_sd) ) for x in range(self.on_time) ])
+      else:
+        def add_high(s):
+            seq.extend([self.am_high] * (self.on_time/2))
+        def add_low(s):
+            seq.extend([self.am_low] * (self.on_time - self.on_time/2))
+        if high_first:
+            add_high(seq)
+            add_low(seq)
+        else:
+            add_low(seq)
+            add_high(seq)
+      seq.extend([ int_constrain( random.gauss(self.am_mean, self.am_sd) ) for x in range(5) ])
+      seq.extend([0] * self.off_time)
+      return seq
+    
+  def _reset_spoofed_values(self):
+      self.cnt = 0
+      seq = [ 120, 80, 40, 20, 20 ]
+      rseq = seq[::-1]
+      seq.extend([0] * self.on_time)
+      seq.extend(rseq)
+      seq.extend([200] * self.off_time)
+      self.poor_signal = seq
+      high_first = random.random() < 0.5
+      self.attention = self._new_response_values(high_first)
+      self.meditation = self._new_response_values(high_first)
+      assert(len(self.attention)==len(self.poor_signal))
+    
   def readDatapoint(self, wait_for_clean_data=False):
     if not self.connected:
       logging.info("Not connected to headset. Connecting now....")
@@ -195,19 +245,18 @@ class FakeHeadset(Headset):
     while True:
       time.sleep(1)
       datapoint = Datapoint()
-      datapoint.poor_signal = 200 if self.cnt%10 < 5 and self.bad_data else 0
-      def int_constrain(x, minx = self.ATT_MED_MIN, maxx = self.ATT_MED_MAX):
-          return int( min( max(minx,x), maxx ) )
-      datapoint.attention = int_constrain( random.gauss(self.ATT_MED_MEAN, self.ATT_MED_SD) )
-      datapoint.meditation = int_constrain( random.gauss(self.ATT_MED_MEAN, self.ATT_MED_SD) )
+      if self.cnt >= len(self.poor_signal):
+          self._reset_spoofed_values()
+      datapoint.poor_signal = self.poor_signal[self.cnt]
+      datapoint.attention = self.attention[self.cnt]
+      datapoint.meditation = self.meditation[self.cnt]
       datapoint.blink = 0
       for name in WAVE_NAMES_IN_ORDER:
         setattr(datapoint, name, random.randint(0,1<<23))
-      #TODO raw data emulation not implemented yet
       logging.debug(datapoint)
       self.cnt = self.cnt + 1
-      if wait_for_clean_data and not datapoint.clean():
-        logging.info("Datapoint not clean.")
+      if wait_for_clean_data and not datapoint.headsetDataReady():
+        logging.info("Headset not on with clear communciation.")
       else:
         return datapoint
 
@@ -217,23 +266,31 @@ class BluetoothHeadset(Headset):
   Represents Mindwave Mobile headset that sends data over Bluetooth
   """
     
-  def __init__(self, macaddr='74:E5:43:B1:93:D5'):
-    self.macaddr = macaddr
+  def __init__(self, macaddrs=ALL_HEADSET_MAC_ADDRS):
+    self.macaddrs = ALL_HEADSET_MAC_ADDRS
     self.socket = None
 
   def connect(self):
-    logging.info("Attempting to connect to headset at %s" % self.macaddr)
+    addrs = self.macaddrs
+    if type(self.macaddrs) != list:
+      addrs = [self.macaddrs]
+    index = 0
     while True:
       try:
-        logging.info("Connecting...")
+        a = addrs[index]
+        logging.info("Attempting to connect to headset #%d at %s..." % (
+          (index + 1), a))
         self.socket = bluetooth.BluetoothSocket(bluetooth.RFCOMM)
-        self.socket.connect((self.macaddr, 1))
+        self.socket.connect((a, 1))
         logging.info("...connected!")
         return
       except bluetooth.BluetoothError, e:
-        logging.error("...failed to connect to headset(will retry in 5s). "
+        logging.error("...failed to connect to headset. "
                       "Error: %s" % str(e))
-        time.sleep(5)
+        if index == len(addrs) - 1:
+          logging.error("Will retry in 5s")
+          time.sleep(5)
+        index = (index + 1) % len(addrs)
 
   def disconnect(self):
     logging.info("Disconnecting...")
@@ -263,7 +320,7 @@ class BluetoothHeadset(Headset):
           while payload:
             payload, code, values = self.pullOneDataRow(payload)
             datapoint.updateValues(code, values)
-        if wait_for_clean_data and not datapoint.clean():
+        if wait_for_clean_data and not datapoint.headsetDataReady():
           logging.info(
               "Datapoint not clean (either headset is not on properly, or "
               "bluetooth is just warming up). If this keeps up "
@@ -272,10 +329,12 @@ class BluetoothHeadset(Headset):
           break
       logging.debug(datapoint)
       return datapoint
-    except bluetooth.BluetoothError, e:
+    # Not completely sure and can't replicate, but I think the DBusException is the 
+    # "111 Bluetooth connection refused" exception we saw during a long test run
+    except (bluetooth.BluetoothError, dbus.exceptions.DBusException) as e:
       logging.error("Bluetooth error interacting with headset: %s" % str(e))
       return None
-
+      
   def readOnePacket(self):
     while not (self.readByte() == SYNC and self.readByte() == SYNC):
       logging.debug("Reading bytes until we get to the start of a packet...")
@@ -337,3 +396,36 @@ class BluetoothHeadset(Headset):
     # The 'ord' builtin converts raw bytes to integers,
     # e.g. '\x12' becomes 18 (or equivalently 0x12)
     return [ord(b) for b in received];
+
+class FileHeadset(Headset):
+  connected = False
+  def connect(self):
+    self.connected = True
+    logging.info("Connected to filesystem headset!")
+    
+  def disconnect(self):
+    self.connected = False
+    logging.info("Disconnected from filesystem headset!")
+
+  def _read(self, name):
+    value = 50
+    try:
+        for line in open(name, 'r'):
+            value = int(line)
+    except IOError:
+        pass
+    return value
+
+  def readDatapoint(self, wait_for_clean_data=False):
+    if not self.connected:
+      logging.info("Not connected to headset. Connecting now....")
+      self.connect()
+    time.sleep(1)
+    datapoint = Datapoint()
+    datapoint.poor_signal = 0
+    datapoint.attention = self._read("attend")
+    datapoint.meditation = self._read("meditate")
+    datapoint.blink = 0
+    for name in WAVE_NAMES_IN_ORDER:
+      setattr(datapoint, name, random.randint(0,1<<23))
+    return datapoint
