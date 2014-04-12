@@ -4,3 +4,5 @@ raw_voltages.txt
 *.Rout
 .RData
 .Rhistory
+
+.DS_Store
