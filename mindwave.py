@@ -22,7 +22,11 @@ Details of the communications protocol can be found here:
   http://wearcam.org/ece516/mindset_communications_protocol.pdf
 '''
 
-import bluetooth
+try:
+  import bluetooth
+except ImportError:
+  print 'Bluetooth module not found, BluetoothHeadset class will not be usable. Try using FakeHeadset.'
+
 import datetime
 import logging
 import time
