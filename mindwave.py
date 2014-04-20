@@ -47,6 +47,9 @@ WAVE_NAMES_IN_ORDER = [
   'delta', 'theta', 'alpha_low', 'alpha_high',
   'beta_low', 'beta_high', 'gamma_low', 'gamma_mid']
 
+def normalize_value(n, range=100):
+  return float(n)/range
+
 class Datapoint():
   def __init__(self):
     # Timestamp of this script when it started reading this datapoint
@@ -58,6 +61,9 @@ class Datapoint():
     # Values, 1-100 computed by the headset's mysterious algorithms
     self.attention = None
     self.meditation = None
+    # Values normalized [0-1]
+    self.attention_scaled = 0.0
+    self.meditation_scaled = 0.0
     # Strength of blink detected, if any (0-255)
     # We don't always read a blink, so by default this is 0 for "no blink"
     self.blink = 0
@@ -70,12 +76,15 @@ class Datapoint():
       setattr(self, name, None)
 
   def updateValues(self, code, values):
+
     if code == POOR_SIGNAL:
       self.poor_signal = values[0]
     elif code == ATTENTION:
       self.attention = values[0]
+      self.attention_scaled = normalize_value(self.attention)
     elif code == MEDITATION:
       self.meditation = values[0]
+      self.meditation_scaled = normalize_value(self.meditation)
     elif code == BLINK:
       self.blink = values[0]
     elif code == EEG_WAVES:
@@ -120,8 +129,8 @@ class Datapoint():
     lines.append("* Headset DATA %sREADY" %
                  ('' if self.headsetDataReady() else 'NOT '))
     lines.append("* Poorness of signal (0-200):\t%d" % self.poor_signal)
-    lines.append("* Attention (1-100):\t%d" % self.attention)
-    lines.append("* Meditation (1-100):\t%d" % self.meditation)
+    lines.append("* Attention (1-100):\t%d\t [0-1]:\t%.2f" % (self.attention, self.attention_scaled))
+    lines.append("* Meditation (1-100):\t%d\t [0-1]:\t%.2f" % (self.meditation, self.meditation_scaled))
     lines.append("* Blink (0-255):\t%d" % self.blink)
     lines.append("* Raw datapoints recorded:\t%d" % len(self.raw_voltages))
     for wave in WAVE_NAMES_IN_ORDER:
@@ -249,7 +258,9 @@ class FakeHeadset(Headset):
           self._reset_spoofed_values()
       datapoint.poor_signal = self.poor_signal[self.cnt]
       datapoint.attention = self.attention[self.cnt]
+      datapoint.attention_scaled = normalize_value(datapoint.attention)
       datapoint.meditation = self.meditation[self.cnt]
+      datapoint.meditation_scaled = normalize_value(datapoint.meditation)
       datapoint.blink = 0
       for name in WAVE_NAMES_IN_ORDER:
         setattr(datapoint, name, random.randint(0,1<<23))
