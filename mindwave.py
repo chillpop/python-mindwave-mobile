@@ -278,13 +278,13 @@ class BluetoothHeadset(Headset):
   """
     
   def __init__(self, macaddrs=ALL_HEADSET_MAC_ADDRS):
-    self.macaddrs = ALL_HEADSET_MAC_ADDRS
+    if type(macaddrs) != list:
+      macaddrs = [macaddrs]
+    self.macaddrs = macaddrs
     self.socket = None
 
   def connect(self):
     addrs = self.macaddrs
-    if type(self.macaddrs) != list:
-      addrs = [self.macaddrs]
     index = 0
     while True:
       try:
