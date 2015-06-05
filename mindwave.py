@@ -299,8 +299,8 @@ class BluetoothHeadset(Headset):
         logging.error("...failed to connect to headset. "
                       "Error: %s" % str(e))
         if index == len(addrs) - 1:
-          logging.error("Will retry in 5s")
-          time.sleep(5)
+          logging.error("Will retry in 1s")
+          time.sleep(1)
         index = (index + 1) % len(addrs)
 
   def disconnect(self):
